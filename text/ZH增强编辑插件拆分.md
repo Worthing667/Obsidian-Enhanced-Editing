@@ -1,4 +1,4 @@
-# ZH增强编辑插件拆分 Walkthrough
+# 增强编辑插件拆分 Walkthrough
 
 ## 概述
 
@@ -29,7 +29,7 @@
 ## 项目结构
 
 ```
-ZH增强编辑/
+增强编辑/
 ├── src/
 │   ├── main.ts                    # 主入口
 │   ├── settings.ts                # 设置类

@@ -1125,6 +1125,7 @@ export function 转换路径() {
 
 export function 续选当前文本() {
     获取编辑器信息();
+    if (!所选文本) return;
     // @ts-ignore
     var lang = 选至行尾.indexOf(所选文本);
     var 起始 = 选至行首.length + lang;
@@ -1230,12 +1231,13 @@ export function 列表转为图示() {
 
     var fName = "";
     var 主要语法 = "";
+    var m = -1; // 初始化 m 变量
     for (var i = 0; i < tagAry.length; i++) {
         var thisLine = tagAry[i];
         var n = thisLine.lastIndexOf("■");
         if (i > 0) {
             var upLine = tagAry[i - 1];
-            var m = upLine.lastIndexOf("■");
+            m = upLine.lastIndexOf("■");
         }
 
         if (n < 0) {
