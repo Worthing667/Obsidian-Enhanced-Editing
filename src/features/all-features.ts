@@ -1,0 +1,1485 @@
+/**
+ * 所有功能方法的实现
+ * 从原始 main.js 提取并转换为 TypeScript
+ */
+
+import { Notice, MarkdownView, TFile, App, Editor } from 'obsidian';
+import { 获取编辑模式 as utils获取编辑模式 } from '../utils/editor';
+import { 简体字表, 繁体字表 } from '../data/char-tables';
+import { Settings } from '../settings';
+
+// 全局变量引用
+let app: App;
+let settings: Settings;
+let 编辑模式: Editor;
+let 所选文本: string | null;
+let 笔记正文: string;
+let 笔记全文: any;
+let 当前行文本: string;
+let 当前光标: any;
+let 当前行号: number;
+let 选至行首: string;
+let 选至行尾: string;
+let 末行行号: number;
+let 末行文本: string;
+let 选至文首: string;
+let 选至文末: string;
+
+// 格式刷状态
+let isGLS = false;
+let isCTS = false;
+let isXTS = false;
+let isSCS = false;
+let isXHS = false;
+let isSB = false;
+let isXB = false;
+
+// 设置全局变量的函数
+export function setGlobals(globals: {
+    app: App;
+    settings: Settings;
+}) {
+    app = globals.app;
+    settings = globals.settings;
+}
+
+// 获取格式刷状态
+export function getFormatBrushState() {
+    return { isGLS, isCTS, isXTS, isSCS, isXHS, isSB, isXB };
+}
+
+// 格式刷管理
+export function 关闭格式刷() {
+    isGLS = false;
+    isCTS = false;
+    isXTS = false;
+    isSCS = false;
+    isXHS = false;
+    isSB = false;
+    isXB = false;
+}
+
+// ==================== 基础 Helper 函数 ====================
+
+function 获取编辑模式(): Editor | undefined {
+    return utils获取编辑模式(app);
+}
+
+function 获取编辑器信息() {
+    编辑模式 = 获取编辑模式()!;
+    if (!编辑模式) return;
+
+    笔记全文 = 编辑模式.getDoc();
+    笔记正文 = 编辑模式.getValue(); // Use getValue directly
+    所选文本 = 编辑模式.getSelection();
+    当前光标 = 编辑模式.getCursor();
+    当前行号 = 当前光标.line;
+    当前行文本 = 编辑模式.getLine(当前行号);
+    选至行首 = 编辑模式.getRange({ line: 当前行号, ch: 0 }, 当前光标);
+
+    if (当前行文本 != "") {
+        选至行尾 = 编辑模式.getRange(当前光标, { line: 当前行号, ch: 当前行文本.length });
+    } else {
+        选至行尾 = 编辑模式.getRange(当前光标, { line: 当前行号, ch: 0 });
+    };
+
+    末行行号 = 编辑模式.lastLine();
+    末行文本 = 编辑模式.getLine(末行行号);
+    选至文首 = 编辑模式.getRange({ line: 0, ch: 0 }, { line: 当前行号, ch: 0 });
+
+    if (末行文本 != "") {
+        选至文末 = 编辑模式.getRange({ line: 当前行号, ch: 0 }, { line: 末行行号, ch: 末行文本.length });
+    } else {
+        选至文末 = 编辑模式.getRange({ line: 当前行号, ch: 0 }, { line: 末行行号, ch: 0 });
+    };
+}
+
+function 替换所选文本(text: string) {
+    if (!编辑模式) 获取编辑器信息();
+    if (text == null) return;
+    编辑模式.replaceSelection(text);
+}
+
+function 替换笔记正文(text: string) {
+    if (!编辑模式) 获取编辑器信息();
+    if (编辑模式.getSelection() == "") {
+        编辑模式.setValue(text);
+    } else {
+        编辑模式.replaceSelection(text);
+    }
+}
+
+// ==================== 光标导航功能 ====================
+
+export function 光标跳转(方向: string) {
+    let 表达式: RegExp;
+    if (!编辑模式) { return; }
+
+    if (所选文本 == null) {
+        const 标题式 = /^\s*#+ [^#]+$/;
+        const 列表式 = /^\s*(\- [^\[]|\d+\. ).*$/;
+        const 待办式 = /^\s*\- \[[^\[\]]] .*$/;
+        const 代码式 = /^```[^`]*$/;
+        const 引用式 = /^>.*$/;
+
+        if (标题式.test(当前行文本)) {
+            表达式 = 标题式;
+        } else if (待办式.test(当前行文本)) {
+            表达式 = 待办式;
+        } else if (列表式.test(当前行文本)) {
+            表达式 = 列表式;
+        } else if (代码式.test(当前行文本)) {
+            表达式 = 代码式;
+        } else if (引用式.test(当前行文本)) {
+            表达式 = 引用式;
+        } else {
+            选择当前语法();
+            return;
+        }
+
+        console.log('表达式 ' + 表达式);
+        for (let i = 1; i <= 末行行号; i++) {
+            let 新行号: number;
+            if (方向 == "下") {
+                新行号 = 当前行号 + i;
+                if (新行号 > 末行行号) { 新行号 = 新行号 - 末行行号 - 1; }
+            } else {
+                新行号 = 当前行号 - i;
+                if (新行号 < 0) { 新行号 = 末行行号 + 新行号 + 1; }
+            }
+
+            const 新行文本 = 编辑模式.getLine(新行号);
+            if (表达式.test(新行文本)) {
+                编辑模式.setCursor({ line: 新行号, ch: 新行文本.length });
+                return;
+            }
+        }
+    } else {
+        const reg1 = /(~~|%%|==|\*\*?|<[^<>]*?>|!?\[\[*|`|_|!\[)([^!#=\[\]<>`_\*~\(\)]*)/;
+        const reg2 = /^([^!=\[\]<>`_\*~\(\)]*)(~~|%%|==|\*\*?|<[^<>]*>|\]\]|`|_|\]\([^\(\)\[\]]*\))/;
+
+        for (let i = 1; i <= 笔记正文.length; i++) {
+            let 后文;
+            if (方向 == "下") {
+                后文 = 编辑模式.getRange(当前光标, { line: 末行行号, ch: 末行文本.length });
+                后文 = 后文.replace(/^[!=\[\]<>`_\*~\(\)]+/, "");
+            } else {
+                后文 = 编辑模式.getRange({ line: 0, ch: 0 }, 当前光标);
+                后文 = 后文.replace(/[!=\[\]<>`_\*~\(\)]+$/, "");
+            }
+
+            const m1 = 后文.match(reg1);
+            const m2 = 后文.match(reg2);
+            if (m1 != null && m2 != null) {
+                const 起点行 = (后文.match(/\n/g) || []).length;
+                const 末行 = 后文.replace(/^[\s\S]*\n/, "");
+                编辑模式.setSelection({ line: 起点行, ch: 末行.indexOf(m1[0]) }, { line: 起点行, ch: 末行.indexOf(m1[0]) + m1[0].length + m2[0].length });
+                return;
+            }
+        }
+    }
+}
+
+export function 选择当前语法() {
+    获取编辑器信息();
+    if (!选至行首 || !选至行尾) return;
+    var m1 = 选至行首.match(/(\*\*|==|~~|%%|\[\[)[^\*=~%\[\]]*$/m);
+    var m2 = 选至行尾.match(/^[^\*=~%\[\]]*(\*\*|==|~~|%%|\]\])/m);
+
+    if (m1 && m2) {
+        var 句前 = m1[0];
+        var 句后 = m2[0];
+        var _length1 = 选至行首.length - 句前.length;
+        var _length2 = 选至行首.length + 句后.length;
+        编辑模式.setSelection({ line: 当前行号, ch: _length1 }, { line: 当前行号, ch: _length2 });
+    }
+}
+
+export function 切换文件列表(_num: number, app: App) {
+    const 当前文件 = app.workspace.getActiveFile();
+    if (!当前文件) return;
+
+    const 当前文件路径 = 当前文件.path;
+    const 父级文件夹 = 当前文件路径.replace(/[^\\/]+$/, "");
+
+    let 同级文件列表: TFile[] = [];
+    app.vault.getMarkdownFiles().forEach((file) => {
+        if (file.path == 父级文件夹 + file.basename + ".md") {
+            同级文件列表.push(file);
+        }
+    });
+
+    同级文件列表 = 同级文件列表.sort((str1, str2) => {
+        return str1.path.localeCompare(str2.path, 'zh');
+    });
+
+    let thisID = 同级文件列表.indexOf(当前文件) + _num;
+    if (thisID > 同级文件列表.length - 1) {
+        thisID = 0;
+    } else if (thisID < 0) {
+        thisID = 同级文件列表.length - 1;
+    }
+
+    const xinFile = 同级文件列表[thisID];
+    (app.workspace as any).activeLeaf.openFile(xinFile);
+}
+
+// ==================== 追加功能函数 ====================
+
+export function 重复当前行() {
+    获取编辑器信息();
+    if (!编辑模式 || !当前行文本) return;
+    var 新行文本 = "\n" + 当前行文本;
+    let ch = 当前行文本.length;
+    笔记全文.replaceRange(新行文本, { line: 当前行号, ch: ch }, { line: 当前行号, ch: ch });
+}
+
+export function 智能符号() {
+    获取编辑器信息();
+    if (!编辑模式 || !选至行首 || !选至行尾 || !当前光标) return;
+
+    var 标前两字 = 编辑模式.getRange({ line: 当前行号, ch: 选至行首.length - 2 }, 当前光标);
+    // var 标后两字 = 编辑模式.getRange(当前光标, { line: 当前行号, ch: 选至行首.length + 2 });
+
+    if (选至行尾.match(/^(\]\]|\=\=|\*\*|\~\~)/)) {
+        编辑模式.exec("goRight");
+        编辑模式.exec("goRight");
+    } else if (选至行尾.match(/^[$》〉］｝】〗〕』」）}\)]/)) {
+        编辑模式.exec("goRight");
+    } else if (标前两字.match(/^[【\[][（\(]$/)) {
+        笔记全文.replaceRange("〖", { line: 当前行号, ch: 选至行首.length - 2 }, 当前光标);
+    } else if (标前两字.match(/^[（\(][《\<]$/)) {
+        笔记全文.replaceRange("〈", { line: 当前行号, ch: 选至行首.length - 2 }, 当前光标);
+    } else if (标前两字.match(/^[\(（][【\[]$/)) {
+        笔记全文.replaceRange("〔", { line: 当前行号, ch: 选至行首.length - 2 }, 当前光标);
+    } else if (标前两字.match(/^[“\"][【\[]$/)) {
+        笔记全文.replaceRange("『", { line: 当前行号, ch: 选至行首.length - 2 }, 当前光标);
+    } else if (标前两字.match(/^[‘\'][【\[]$/)) {
+        笔记全文.replaceRange("「", { line: 当前行号, ch: 选至行首.length - 2 }, 当前光标);
+    } else if (标前两字.match(/^……$/)) {
+        笔记全文.replaceRange("^", { line: 当前行号, ch: 选至行首.length - 2 }, 当前光标);
+    } else if (标前两字.match(/^￥￥$/)) {
+        笔记全文.replaceRange("$$", { line: 当前行号, ch: 选至行首.length - 2 }, 当前光标);
+        编辑模式.exec("goLeft");
+    } else if (选至行首.match(/《[^《》〈〉｛｝【】〖〗〔〕（）『』「」]*$/)) {
+        笔记全文.replaceRange("》", 当前光标, 当前光标);
+        编辑模式.exec("goRight");
+    } else if (选至行首.match(/〈[^《》〈〉［］｛｝【】〖〗〔〕（）『』「」]*$/)) {
+        笔记全文.replaceRange("〉", 当前光标, 当前光标);
+        编辑模式.exec("goRight");
+    } else if (选至行首.match(/［[^《》〈〉［］｛｝【】〖〗〔〕（）『』「」]*$/)) {
+        笔记全文.replaceRange("］", 当前光标, 当前光标);
+        编辑模式.exec("goRight");
+    } else if (选至行首.match(/｛[^《》〈〉［］｛｝【】〖〗〔〕（）『』「」]*$/)) {
+        笔记全文.replaceRange("｝", 当前光标, 当前光标);
+        编辑模式.exec("goRight");
+    } else if (选至行首.match(/【[^《》〈〉［］｛｝【】〖〗〔〕（）『』「」]*$/)) {
+        笔记全文.replaceRange("】", 当前光标, 当前光标);
+        编辑模式.exec("goRight");
+    } else if (选至行首.match(/〖[^《》〈〉［］｛｝【】〖〗〔〕（）『』「」]*$/)) {
+        笔记全文.replaceRange("〗", 当前光标, 当前光标);
+        编辑模式.exec("goRight");
+    } else if (选至行首.match(/〔[^《》〈〉［］｛｝【】〖〗〔〕（）『』「」]*$/)) {
+        笔记全文.replaceRange("〕", 当前光标, 当前光标);
+        编辑模式.exec("goRight");
+    } else if (选至行首.match(/『[^《》〈〉［］｛｝【】〖〗〔〕（）『』「」]*$/)) {
+        笔记全文.replaceRange("』", 当前光标, 当前光标);
+        编辑模式.exec("goRight");
+    } else if (选至行首.match(/「[^《》〈〉［］｛｝【】〖〗〔〕（）『』「」]*$/)) {
+        笔记全文.replaceRange("」", 当前光标, 当前光标);
+        编辑模式.exec("goRight");
+    } else if (选至行首.match(/（[^《》〈〉［］｛｝【】〖〗〔〕（）『』「」]*$/)) {
+        笔记全文.replaceRange("）", 当前光标, 当前光标);
+        编辑模式.exec("goRight");
+    } else if (选至行首.match(/^》$/)) {
+        笔记全文.replaceRange(">", { line: 当前行号, ch: 0 }, 当前光标);
+    } else if (选至行首.match(/^、$/)) {
+        笔记全文.replaceRange("/", { line: 当前行号, ch: 0 }, 当前光标);
+    } else if (选至行首.match(/\[\[[^=\[\]\*~]*$/)) {
+        笔记全文.replaceRange("]]", 当前光标, 当前光标);
+        编辑模式.exec("goRight");
+        编辑模式.exec("goRight");
+    } else if (选至行首.match(/==[^=\[\]\*~]*$/)) {
+        笔记全文.replaceRange("==", 当前光标, 当前光标);
+        编辑模式.exec("goRight");
+        编辑模式.exec("goRight");
+    } else if (选至行首.match(/\*\*[^=\[\]\*~]*$/)) {
+        笔记全文.replaceRange("**", 当前光标, 当前光标);
+        编辑模式.exec("goRight");
+        编辑模式.exec("goRight");
+    } else if (选至行首.match(/%%[^=\[\]\*~%]*$/)) {
+        笔记全文.replaceRange("%%", 当前光标, 当前光标);
+        编辑模式.exec("goRight");
+        编辑模式.exec("goRight");
+    } else if (选至行首.match(/~~[^=\[\]\*~]*$/)) {
+        笔记全文.replaceRange("~~", 当前光标, 当前光标);
+        编辑模式.exec("goRight");
+        编辑模式.exec("goRight");
+    } else if (选至行首.match(/^(dataview|dv)$/i)) {
+        笔记全文.replaceRange("```dataview\n\n```\n", { line: 当前行号, ch: 0 }, 当前光标);
+        编辑模式.exec("goLeft");
+        编辑模式.exec("goUp");
+    } else if (选至行首.match(/^(mermaid|mm)$/i)) {
+        笔记全文.replaceRange("```mermaid\ngraph TD\n\nA[2021]\nB[2022]\n\nA-->B\n```\n", { line: 当前行号, ch: 0 }, 当前光标);
+    } else if (选至行首.match(/^(query|qy)$/i)) {
+        笔记全文.replaceRange("```query\n\n```\n", { line: 当前行号, ch: 0 }, 当前光标);
+        编辑模式.exec("goLeft");
+        编辑模式.exec("goUp");
+    } else if (选至行首.match(/^(JavaScript|js)$/i)) {
+        笔记全文.replaceRange("```JavaScript\n\n```\n", { line: 当前行号, ch: 0 }, 当前光标);
+        编辑模式.exec("goLeft");
+        编辑模式.exec("goUp");
+    } else if (选至行首.match(/^```js$/i)) {
+        笔记全文.replaceRange("```JavaScript", { line: 当前行号, ch: 0 }, 当前光标);
+        编辑模式.exec("goDown");
+    } else if (选至行首.match(/^(Java|ja)$/i)) {
+        笔记全文.replaceRange("```Java\n\n```\n", { line: 当前行号, ch: 0 }, 当前光标);
+        编辑模式.exec("goLeft");
+        编辑模式.exec("goUp");
+    } else if (选至行首.match(/^```ja$/i)) {
+        笔记全文.replaceRange("```Java", { line: 当前行号, ch: 0 }, 当前光标);
+        编辑模式.exec("goDown");
+    } else if (选至行首.match(/^(Python|py)$/i)) {
+        笔记全文.replaceRange("```Python\n\n```\n", { line: 当前行号, ch: 0 }, 当前光标);
+        编辑模式.exec("goLeft");
+        编辑模式.exec("goUp");
+    } else if (选至行首.match(/^```py$/i)) {
+        笔记全文.replaceRange("```Python", { line: 当前行号, ch: 0 }, 当前光标);
+        编辑模式.exec("goDown");
+    } else if (选至行首.match(/^(CSS)$/i)) {
+        笔记全文.replaceRange("```CSS\n\n```\n", { line: 当前行号, ch: 0 }, 当前光标);
+        编辑模式.exec("goLeft");
+        编辑模式.exec("goUp");
+    }
+}
+
+export function 标题语法(_str: string) {
+    var link = new RegExp("^" + _str + " ([^#]+)"); 	//是否包含几个#符号
+    获取编辑器信息();
+    if (!编辑模式) return;
+
+    var 新文本 = "";
+    var 新定位 = 选至行首.replace(/^#+\s/, "");
+    if (_str == "") {
+        新文本 = 当前行文本.replace(/^\s*#+\s/, "");
+    } else if (link.test(当前行文本)) {
+        新文本 = 当前行文本.replace(link, "$1");
+    } else {
+        新文本 = 当前行文本.replace(/^#+[ ]+/, "");
+        新文本 = 新文本.replace(/^\s*/, _str + " ");
+        新定位 = _str + " " + 新定位;
+    }
+    笔记全文.replaceRange(新文本, { line: 当前行号, ch: 0 }, { line: 当前行号, ch: 当前行文本.length });
+    编辑模式.setCursor({ line: 当前行号, ch: 新定位.length });
+}
+
+export function 转换文字颜色(_color: string) {
+    var _html0 = /\<font color=[0-9a-zA-Z#]+[^\<\>]*\>[^\<\>]+\<\/font\>/g;
+    var _html1 = /^\<font color=[0-9a-zA-Z#]+[^\<\>]*\>([^\<\>]+)\<\/font\>$/;
+    var _html2 = '\<font color=' + _color + '\>$1\<\/font\>';
+    var _html3 = /\<font color=[^\<]*$|^[^\>]*font\>/g;	//是否只包含一侧的<>
+
+    获取编辑器信息();
+    if (所选文本 == null) return;
+
+    let text = 所选文本;
+    if (_html3.test(text)) {
+        return;
+    } else if (_html0.test(text)) {
+        if (_html1.test(text)) {
+            text = text.replace(_html1, _html2);
+        } else {
+            text = text.replace(/\<font color=[0-9a-zA-Z#]+[^\<\>]*?\>|\<\/font\>/g, "");
+        }
+    } else {
+        text = text.replace(/^(.+)$/mg, _html2);
+    }
+    替换所选文本(text);
+}
+
+export function 转换背景颜色(_color: string) {
+    var _html0 = /\<span style=[\"'][^\<\>]*color:[0-9a-zA-Z#]+[\"'][^\<\>]*\>[^\<\>]+\<\/span\>/g;
+    var _html1 = /^\<span style=[\"'][^\<\>]*color:[0-9a-zA-Z#]+[\"'][^\<\>]*\>([^\<\>]+)\<\/span\>$/;
+    var _html2 = '\<span style=\"background\-color:' + _color + '\"\>$1\<\/span\>';
+    var _html3 = /\<span style=[^\<]*$|^[^\>]*span\>/g;	//是否只包含一侧的<>
+
+    获取编辑器信息();
+    if (所选文本 == null) return;
+
+    let text = 所选文本;
+    if (_html3.test(text)) {
+        return;
+    } else if (_html0.test(text)) {
+        if (_html1.test(text)) {
+            text = text.replace(_html1, _html2);
+        } else {
+            text = text.replace(/\<span style=[\"'][^\<\>]*color:[0-9a-zA-Z#]+[\"'][^\<\>]*\>|\<\/span\>/g, "");
+        }
+    } else {
+        text = text.replace(/^(.+)$/mg, _html2);
+    }
+    替换所选文本(text);
+}
+
+export function 转换无语法文本() {
+    获取编辑器信息();
+    if (!编辑模式) return;
+
+    var mdText = /(^#+\s|(?<=^|\s*)#|^\>|^\- \[( |x)\]|^\+ |\<[^\<\>]+?\>|^1\. |^\s*\- |^\-+$|^\*+$)/mg;
+    if (所选文本 == null) {
+        if (isCTS || isGLS || isSB || isSCS || isXB || isXHS || isXTS) {
+            // @ts-ignore
+            isCTS = false; isGLS = false; isSB = false; isSCS = false; isXB = false; isXHS = false; isXTS = false;
+            new Notice("已关闭格式刷！");
+        } else {
+            var reg1 = /(~~|%%|==|\*\*?|\<[^\<\>]*?\>|!?\[\[*|`|_|!?\[)([^!#=\[\]\<\>\`_\*~\(\)]*)$/;
+            var reg2 = /^([^!=\[\]\<\>\`_\*~\(\)]*)(~~|%%|==|\*\*?|\<[^\<\>]*\>|\]\]|`|_|\]\([^\(\)\[\]]*\))/;
+            if (选至行首.match(reg1) != null && 选至行尾.match(reg2) != null) {
+                // @ts-ignore
+                const newHead = 选至行首.replace(reg1, "$2");
+                // @ts-ignore
+                const newTail = 选至行尾.replace(reg2, "$1");
+                var _ch = newHead.length;
+                笔记全文.replaceRange(newHead + newTail, { line: 当前行号, ch: 0 }, { line: 当前行号, ch: 当前行文本.length });
+                编辑模式.setCursor({ line: 当前行号, ch: _ch });
+            }
+        }
+    } else {
+        let text = 所选文本;
+        text = text.replace(mdText, "");
+        text = text.replace(/(\r*\n)+/mg, "\r\n");
+        替换所选文本(text);
+    }
+}
+
+export function 转换内部链接() {
+    let 提示语 = "";
+    let 旧文本 = "";
+    获取编辑器信息();
+    if (所选文本 == null) {
+        替换所选文本("[[");
+        return;
+    }
+    旧文本 = 所选文本;
+
+    var link = /[\"\|\[\]\?\\\*\<\>\/:]/g;
+    var link1 = /^([^\[\]]*)!\[+([^\[\]]*)$|^([^\[\]]*)\[+([^\[\]]*)$|^([^\[\]]*)\]+([^\[\]]*)$|^([^\[\]]*)\[([^\[\]]*)\]([^\[\]]*)$/g;
+    var link2 = /^[^\[\]]*(\[\[[^\[\]]*\]\][^\[\]]*)+$/g;
+    var link4 = /([^\[\]\(\)\r\n]*)(\n*)(http.*)/mg;
+    var link5 = /!?\[([^\[\]\r\n]*)(\n*)\]\((http[^\(\)]*)\)/mg;
+    var link8 = /([、\n])/g;
+    if (link.test(所选文本)) {
+        if (link1.test(所选文本)) {
+            new Notice("划选内容不符合内链语法格式！");
+            return;
+        } else if (link2.test(所选文本)) {
+            提示语 = "内容包含内链语法格式，已经去除[[]]！";
+            所选文本 = 所选文本.replace(/(\[\[(.*\|)*)/g, "");
+            所选文本 = 所选文本.replace(/\]\]/g, "");
+        } else if (link5.test(所选文本)) {
+            所选文本 = 所选文本.replace(link5, "$1$3");
+            提示语 = "内容包含有[]()链接语法，已经去除符号！";
+        } else if (link4.test(所选文本)) {
+            所选文本 = 所选文本.replace(link4, "[$1]($3)");
+            所选文本 = 所选文本.replace("[\r\n]", "");
+            提示语 = "内容包含有说明文本和网址，已经转换！";
+        } else {
+            new Notice("文件名不能包含下列字符:\*\"\\\/\<\>\:\|\?");
+            return;
+        }
+    } else {
+        提示语 = "内容未包含内链语法格式，需要转换";
+        if (link8.test(所选文本)) {
+            所选文本 = 所选文本.replace(link8, "]]$1[[");
+        }
+        所选文本 = "[[" + 所选文本 + "]]";
+    }
+    console.log("您划选了 " + 旧文本 + "\n" + 提示语);
+    替换所选文本(所选文本);
+}
+
+export function 转换同义链接() {
+    获取编辑器信息();
+    if (所选文本 == null) {
+        替换所选文本("[[");
+        return;
+    }
+    var lNum = 所选文本.length + 3
+    var link = /[\"\|\[\]\?\\\*\<\>\/:\n]/g;
+    if (link.test(所选文本)) {
+        return;
+    } else {
+        所选文本 = "[[|" + 所选文本 + "]]";
+    }
+    替换所选文本(所选文本);
+
+    var i = 0;
+    while (i < lNum) {
+        编辑模式.exec("goLeft");
+        i++;
+    }
+}
+
+export function 转换粗体() {
+    获取编辑器信息();
+    if (所选文本 == null) {
+        if (isCTS) {
+            isCTS = false;
+            new Notice("已关闭格式刷！");
+        } else {
+            关闭格式刷();
+            isCTS = true;
+            new Notice("「粗体」刷已打开！\n提醒：首尾不要选中标点。");
+        }
+    } else {
+        var link = /(\<b\>|\*\*)([^\*]*)(\<\/b\>|\*\*)/g;
+        var link1 = /^[^\*](\<\/?b\>|\*\*)[^\*]*$/;
+        if (link1.test(所选文本)) {
+            return;
+        } else if (link.test(所选文本)) {
+            所选文本 = 所选文本.replace(/(\<\/?b\>|\*\*)/g, "");
+        } else {
+            if (/^\<.*\>$/.test(所选文本)) {
+                所选文本 = 所选文本.replace(/^/, "<b>");
+                所选文本 = 所选文本.replace(/$/, "</b>");
+            } else {
+                所选文本 = 所选文本.replace(/^([\t\s]*)([^\t\s])/mg, "$1**$2").replace(/([^\t\s])([\t\s]*)$/mg, "$1**$2");
+                所选文本 = 所选文本.replace(/^\*\*\*\*$/mg, "");
+            }
+        }
+        替换所选文本(所选文本);
+        编辑模式.exec("goRight");
+    }
+}
+
+export function 转换高亮() {
+    获取编辑器信息();
+    if (所选文本 == null) {
+        if (isGLS) {
+            isGLS = false;
+            new Notice("已关闭格式刷！");
+        } else {
+            关闭格式刷();
+            isGLS = true;
+            new Notice("「高亮」刷已打开！");
+        }
+    } else {
+        var link = /==[^=]*==/;
+        var link1 = /^[^=]*==[^=]*$/;
+        if (link1.test(所选文本)) {
+            return;
+        } else if (link.test(所选文本)) {
+            所选文本 = 所选文本.replace(/==/g, "");
+        } else {
+            所选文本 = 所选文本.replace(/^([\t\s]*)([^\t\s])/mg, "$1==$2").replace(/([^\t\s])([\t\s]*)$/mg, "$1==$2");
+            所选文本 = 所选文本.replace(/^====$/mg, "");
+        }
+        替换所选文本(所选文本);
+        编辑模式.exec("goRight");
+    }
+}
+
+export function 转换斜体() {
+    获取编辑器信息();
+    if (所选文本 == null) {
+        if (isXTS) {
+            isXTS = false;
+            new Notice("已关闭格式刷！");
+        } else {
+            关闭格式刷();
+            isXTS = true;
+            new Notice("「斜体」刷已打开！\n提醒：首尾不要选中标点。");
+        }
+    } else {
+        var link = /\*[^\*]*\*/;
+        var link1 = /^[^\*]*\*[^\*]*$/;
+        if (link1.test(所选文本)) {
+            return;
+        } else if (link.test(所选文本)) {
+            所选文本 = 所选文本.replace(/\*/g, "");
+        } else {
+            所选文本 = 所选文本.replace(/^(.*)$/mg, "\*$1\*");
+            所选文本 = 所选文本.replace(/^\*\*$/mg, "");
+        }
+        替换所选文本(所选文本);
+        编辑模式.exec("goRight");
+    }
+}
+
+export function 转换删除线() {
+    获取编辑器信息();
+    if (所选文本 == null) {
+        if (isSCS) {
+            isSCS = false;
+            new Notice("已关闭格式刷！");
+        } else {
+            关闭格式刷();
+            isSCS = true;
+            new Notice("「删除线」刷已打开！");
+        }
+    } else {
+        var link = /~~[^~]*~~/;
+        var link1 = /^[^~]*~~[^~]*$/;
+        if (link1.test(所选文本)) {
+            return;
+        } else if (link.test(所选文本)) {
+            所选文本 = 所选文本.replace(/~~/g, "");
+        } else {
+            所选文本 = 所选文本.replace(/^(.*)$/mg, "~~$1~~");
+            所选文本 = 所选文本.replace(/^~~~~$/mg, "");
+        }
+        替换所选文本(所选文本);
+        编辑模式.exec("goRight");
+    }
+}
+
+export function 转换下划线() {
+    获取编辑器信息();
+    if (所选文本 == null) {
+        if (isXHS) {
+            isXHS = false;
+            new Notice("已关闭格式刷！");
+        } else {
+            关闭格式刷();
+            isXHS = true;
+            new Notice("「下划线」刷已打开！");
+        }
+    } else {
+        var link = /\<u\>([^\<\>]*)\<\/u\>/mg;
+        var link1 = /^[^\<\>]*\<\/?u\>[^\<\>]*$/;
+        if (link1.test(所选文本)) {
+            return;
+        } else if (link.test(所选文本)) {
+            所选文本 = 所选文本.replace(link, "$1");
+        } else {
+            所选文本 = 所选文本.replace(/^(.*)$/mg, "<u>$1</u>");
+            所选文本 = 所选文本.replace(/^\<u\>\<\/u\>$/mg, "");
+        }
+        替换所选文本(所选文本);
+        编辑模式.exec("goRight");
+    }
+}
+
+export function 转换行内代码() {
+    获取编辑器信息();
+    if (所选文本 == null) { return };
+    var link = /`[^`]*`/;
+    var link1 = /^[^`]*`[^`]*$/;
+
+    if (link1.test(所选文本)) {
+        return;
+    } else if (link.test(所选文本)) {
+        所选文本 = 所选文本.replace(/`/g, "");
+    } else {
+        所选文本 = 所选文本.replace(/^(.*)$/mg, "`$1`");
+    }
+    替换所选文本(所选文本);
+    编辑模式.exec("goRight");
+}
+
+export function 转换代码块() {
+    获取编辑器信息();
+    var link = /```[^`]+```/;
+    var link1 = /^[^`]*```[^`]*$/m;
+    if (所选文本 == null) { return };
+    所选文本 = 所选文本.replace(/\n/g, "↫");
+    if (link1.test(所选文本)) {
+        return;
+    } else if (link.test(所选文本)) {
+        所选文本 = 所选文本.replace(/↫*```↫?|↫?```↫*/g, "");
+    } else {
+        所选文本 = 所选文本.replace(/^(.*)$/m, "↫```↫$1↫```↫");
+    }
+    所选文本 = 所选文本.replace(/↫/g, "\n");
+    替换所选文本(所选文本);
+    编辑模式.exec("goLeft");
+    编辑模式.exec("goLeft");
+    编辑模式.exec("goLeft");
+    编辑模式.exec("goLeft");
+}
+
+export function 转换三浪线() {
+    获取编辑器信息();
+    var link = /~~~[^~]+~~~/;
+    var link1 = /^[^~]*~~~[^~]*$/m;
+    if (所选文本 == null) { return };
+    所选文本 = 所选文本.replace(/\n/g, "↫");
+    if (link1.test(所选文本)) {
+        return;
+    } else if (link.test(所选文本)) {
+        所选文本 = 所选文本.replace(/~~~↫?|↫?~~~/g, "");
+    } else {
+        所选文本 = 所选文本.replace(/^(.*)$/m, "~~~↫$1↫~~~");
+    }
+    所选文本 = 所选文本.replace(/↫/g, "\n");
+    替换所选文本(所选文本);
+    编辑模式.exec("goRight");
+}
+
+export function 转换上标() {
+    获取编辑器信息();
+    if (所选文本 == null) {
+        if (isSB) {
+            isSB = false;
+            new Notice("已关闭格式刷！");
+        } else {
+            关闭格式刷();
+            isSB = true;
+            new Notice("「上标」刷已打开！");
+        }
+    } else {
+        var link = /\<sup\>[^\<\>]*\<\/sup\>/g;
+        var link1 = /\<sup\>[^\<\>\/]*$|^[^\<\>]*\<\/sup\>/g;
+        if (link1.test(所选文本)) {
+            return;
+        } else if (link.test(所选文本)) {
+            所选文本 = 所选文本.replace(/(\<sup\>|\<\/sup\>)/g, "");
+        } else {
+            所选文本 = 所选文本.replace(/^(.+)$/mg, "\<sup\>$1\<\/sup\>");
+            所选文本 = 所选文本.replace(/^\<sup\>\s*\<\/sup\>$/mg, "");
+        }
+        替换所选文本(所选文本);
+        编辑模式.exec("goRight");
+    };
+}
+
+export function 转换下标() {
+    获取编辑器信息();
+    if (所选文本 == null) {
+        if (isXB) {
+            isXB = false;
+            new Notice("已关闭格式刷！");
+        } else {
+            关闭格式刷();
+            isXB = true;
+            new Notice("「下标」刷已打开！");
+        }
+    } else {
+        var link = /\<sub\>[^\<\>]*\<\/sub\>/g;
+        var link1 = /\<sub\>[^\<\>\/]*$|^[^\<\>]*\<\/sub\>/g;
+        if (link1.test(所选文本)) {
+            return;
+        } else if (link.test(所选文本)) {
+            所选文本 = 所选文本.replace(/(\<sub\>|\<\/sub\>)/g, "");
+        } else {
+            所选文本 = 所选文本.replace(/^(.+)$/mg, "\<sub\>$1\<\/sub\>");
+            所选文本 = 所选文本.replace(/^\<sub\>\s*\<\/sub\>$/mg, "");
+        }
+        替换所选文本(所选文本);
+        编辑模式.exec("goRight");
+    };
+}
+
+export function 转换挖空() {
+    获取编辑器信息();
+    var link = /\{\{c\d::[^\{\}]+\}\}/g;
+    var link1 = /\{\{c[^\{\}]*$|^[^\{\}]*\}\}/g;
+
+    if (!所选文本) return;
+
+    if (link1.test(所选文本)) {
+        return;
+    } else if (link.test(所选文本)) {
+        所选文本 = 所选文本.replace(/(\{\{c\d::|\}\})/g, "");
+    } else {
+        所选文本 = 所选文本.replace(/^(.+)$/mg, "\{\{c1::$1\}\}");
+    }
+    替换所选文本(所选文本);
+}
+
+export function 选择当前整段() {
+    获取编辑器信息();
+    if (当前行文本 != "") {
+        编辑模式.setSelection({ line: 当前行号, ch: 0 }, { line: 当前行号, ch: 当前行文本.length });
+    };
+}
+
+export function 选择当前整句() {
+    获取编辑器信息();
+    // @ts-ignore
+    var 句前 = 选至行首.match(/(?<=(^|[。？！]))[^。？！]*$/)[0];
+    // @ts-ignore
+    var 句后 = 选至行尾.match(/^[^。？！]*([。？！]|$)/)[0];
+    var _length1 = 选至行首.length - 句前.length;
+    var _length2 = 选至行首.length + 句后.length;
+    编辑模式.setSelection({ line: 当前行号, ch: _length1 }, { line: 当前行号, ch: _length2 });
+}
+
+
+
+// ==================== 事件处理 ====================
+
+function 获取所选文本(): string | null {
+    if (!编辑模式) 获取编辑器信息();
+    if (!编辑模式) return null;
+    return 编辑模式.getSelection() || null;
+}
+
+export function handleMouseUp() {
+    获取编辑器信息(); // Update globals
+    if (所选文本 == null) {
+        return;
+    } else if (isGLS) {
+        转换高亮();
+    } else if (isCTS) {
+        转换粗体();
+    } else if (isXTS) {
+        转换斜体();
+    } else if (isSCS) {
+        转换删除线();
+    } else if (isXHS) {
+        转换下划线();
+    } else if (isSB) {
+        转换上标();
+    } else if (isXB) {
+        转换下标();
+    }
+}
+
+// 全局变量 for Keydown
+let 历史缩进: string = "";
+let 按上档键: boolean = false;
+let 编辑中: boolean = false;
+
+export function handleEditorChange() {
+    编辑中 = true;
+    按上档键 = false;
+}
+
+export function handleKeyDown(e: KeyboardEvent) {
+    if (e.key == "Shift") {
+        按上档键 = true;
+    }
+
+    if (e.key == "Enter") {
+        let dn1, dn2;
+        let 代码块内 = false;
+        获取编辑器信息();
+        if (!编辑模式) return;
+
+        const 上行文本 = 编辑模式.getLine(当前行号 - 1);
+        const 缩进字符 = 上行文本.match(/^[\t\s]*/)?.[0] || "";
+
+        if (编辑中) {
+            const 头代码 = 选至文首.match(/^```/mg);
+            const 尾代码 = 选至文末.match(/^```/mg);
+            const 在列表行 = 当前行文本.search(/^[\t ]*(\-|\d+\.) /);
+            const reg1 = /^[\t ]+$/m;
+            const reg2 = /^[\t ]*\/\//m;
+
+            if (头代码 != null && 尾代码 != null) {
+                dn1 = 头代码.length;
+                dn2 = 尾代码.length;
+
+                if (dn1 % 2 == 1 && dn2 % 2 == 1) {
+                    代码块内 = true;
+                    console.log("当前光标处在代码块内！");
+                    let 缩进文本 = "";
+                    let 缩进次数, i = 0;
+
+                    if (上行文本.match(reg1) != null) {
+                        缩进文本 = 历史缩进;
+                    } else if (上行文本.match(/[;\}]$/m) != null || 上行文本.match(reg2) != null) {
+                        缩进文本 = 缩进字符 + "";
+                    } else if (上行文本.match(/[\{\)]$/m) != null) {
+                        缩进文本 = 缩进字符 + "\t";
+                    } else if (上行文本 == "") {
+                        缩进文本 = "";
+                    }
+
+                    if (缩进文本 == "") {
+                        缩进次数 = 0;
+                    } else {
+                        缩进次数 = 缩进文本.length;
+                        笔记全文.replaceRange(缩进文本, 当前光标, 当前光标);
+                        while (i < 缩进次数) {
+                            编辑模式.exec("goRight");
+                            i++;
+                        }
+                    }
+                    历史缩进 = 缩进文本;
+                }
+            } else if (settings.twoEnter && !代码块内 && 在列表行 < 0) {
+                if (按上档键) {
+                    笔记全文.replaceRange("", 当前光标, 当前光标);
+                } else {
+                    笔记全文.replaceRange("\n", 当前光标, 当前光标);
+                    编辑模式.exec("goRight");
+                }
+            }
+            编辑中 = false;
+        }
+    }
+}
+
+export function 指定当前文件名() {
+    获取编辑器信息();
+    if (!app) return;
+    const 当前文件 = app.workspace.getActiveFile();
+    if (!当前文件) return;
+
+    if (!所选文本) return;
+
+    app.vault.adapter.rename(当前文件.path, 所选文本 + ".md");
+    console.log(当前文件.path + "\n" + 所选文本);
+}
+
+export function 获取相对路径() {
+    获取编辑器信息();
+    if (!app) return;
+    const 当前文件 = app.workspace.getActiveFile();
+    if (!当前文件) return;
+    const 当前文件路径 = 当前文件.path;
+    const 相对目录 = 当前文件路径.replace(/(?<=\/)[^/]+$/m, "");
+    new Notice("当前笔记位于：" + 相对目录);
+}
+
+
+export function 简体转繁() {
+    获取编辑器信息();
+    if (!笔记正文) return;
+    let text = 笔记正文;
+    for (let i = 0; i < 简体字表.length; i++) {
+        text = text.replace(new RegExp(简体字表[i], "g"), 繁体字表[i]);
+    }
+    替换笔记正文(text);
+}
+
+export function 繁体转简() {
+    获取编辑器信息();
+    if (!笔记正文) return;
+    let text = 笔记正文;
+    for (let i = 0; i < 繁体字表.length; i++) {
+        text = text.replace(new RegExp(繁体字表[i], "g"), 简体字表[i]);
+    }
+    替换笔记正文(text);
+}
+
+export function 英转中文标点() {
+    获取编辑器信息();
+    if (!笔记正文) return;
+    let text = 笔记正文;
+    text = text.replace(/(?<=[^a-z0-9\>\]]),/g, "，");
+    text = text.replace(/(?<=[^a-z0-9\>\]])\./isg, "。");
+    text = text.replace(/(?<=[^a-z0-9\>\]])\?/g, "？");
+    text = text.replace(/(?<=[^a-z0-9\>\]])!(?=[^\[])/g, "！");
+    text = text.replace(/;/g, "；");
+    text = text.replace(/(?<=[^:]):|:(?=[^:])/g, "：");
+    text = text.replace(/\(/g, "（");
+    text = text.replace(/\)/g, "）");
+    text = text.replace(/\{([^{}]*)\}/g, "｛$1｝");
+    text = text.replace(/\"([^\"]*?)\"/g, "“$1”");
+    替换笔记正文(text);
+}
+
+export function 中转英文标点() {
+    获取编辑器信息();
+    if (!笔记正文) return;
+    let text = 笔记正文;
+    text = text.replace(/，/g, ",");
+    text = text.replace(/。/g, "\.");
+    text = text.replace(/？/g, "\?");
+    text = text.replace(/！/g, "!");
+    text = text.replace(/；/g, ";");
+    text = text.replace(/：/g, ":");
+    text = text.replace(/（/g, "\(");
+    text = text.replace(/）/g, "\)");
+    text = text.replace(/｛([^｛｝]*)｝/g, "{$1}");
+    text = text.replace(/“([^“”]*)”/g, "\"$1\"");
+    替换笔记正文(text);
+}
+
+export function 批量插入空行() {
+    获取编辑器信息();
+    if (!笔记正文) return;
+    let text = 笔记正文.replace(/(?<!^(\s*\- |\s*[0-9]+\.|\s*\>|\n)[^\n]*)\n(?!(\s*\- |\s*[0-9]+\.|\s*\>|\n))/g, "$1\n\n");
+    替换笔记正文(text);
+}
+
+export function 批量去除空行() {
+    获取编辑器信息();
+    if (!笔记正文) return;
+    let text = 笔记正文.replace(/(\r\n|\n)[\t\s]*(\r\n|\n)/g, "\n");
+    替换笔记正文(text);
+}
+
+export function 首行缩进两字符() {
+    获取编辑器信息();
+    let isIndent = true; // Logic simplified from original, blindly indenting or toggling?
+    // Original had logic to toggle based on `isIndent` var which was local to function (re-initialized every call).
+    // So it always entered first branch? `let isIndent = true`.
+    if (!笔记正文) return;
+    // Always remove first then add?
+    let text = 笔记正文.replace(/^[‌‌‌　]+/mg, "");
+    text = text.replace(/^(?!([\n\s\>#]+|```|\-\-\-|\|[^\|]|\*\*\*))/mg, "‌‌‌　　");
+    替换笔记正文(text);
+}
+
+export function 末尾追加空格() {
+    获取编辑器信息();
+    if (!笔记正文) return;
+    let text = 笔记正文.replace(/(?<!(\-\-\-|\*\*\*|\s\s))\n/g, "  \n");
+    替换笔记正文(text);
+}
+
+export function 去除末尾空格() {
+    获取编辑器信息();
+    if (!笔记正文) return;
+    let text = 笔记正文.replace(/\s\s\n/g, "\n");
+    替换笔记正文(text);
+}
+
+export function 添加中英间隔() {
+    获取编辑器信息();
+    if (!笔记正文) return;
+    let text = 笔记正文;
+    text = text.replace(/([a-zA-Z]+)([一-鿆]+)/g, "$1 $2");
+    text = text.replace(/([一-鿆]+)([a-zA-Z]+)/g, "$1 $2");
+    替换笔记正文(text);
+}
+
+export function 去除所有空格() {
+    获取编辑器信息();
+    if (!笔记正文) return;
+    let text = 笔记正文.replace(/[ 　]+/g, "");
+    替换笔记正文(text);
+}
+
+export function 上方插入空行() {
+    获取编辑器信息();
+    if (!当前行文本) return;
+    var 新文本 = "\r\n" + 当前行文本;
+    笔记全文.replaceRange(新文本, { line: 当前行号, ch: 0 }, { line: 当前行号, ch: 当前行文本.length });
+}
+
+export function 下方插入空行() {
+    获取编辑器信息();
+    if (!当前行文本) return;
+    var 新文本 = 当前行文本 + "\r\n";
+    笔记全文.replaceRange(新文本, { line: 当前行号, ch: 0 }, { line: 当前行号, ch: 当前行文本.length });
+    编辑模式.setSelection({ line: 当前行号, ch: 当前行文本.length + 1 }, { line: 当前行号, ch: 当前行文本.length + 1 });
+}
+
+export function 修复意外断行() {
+    获取编辑器信息();
+    if (!笔记正文) return;
+    let text = 笔记正文;
+    text = text.replace(/(?<=[^a-zA-Z])\s+(?=\r*\n)/g, "");
+    text = text.replace(/(?<=[a-zA-Z])\s+(?=\r*\n)/g, " ");
+    text = text.replace(/([^。？！\.\?\!])(\r?\n)+/g, "$1");
+    替换笔记正文(text);
+}
+
+export function 修复错误语法() {
+    获取编辑器信息();
+    if (!笔记正文) return;
+    let text = 笔记正文;
+    text = text.replace(/[\[【]([^\[\]【】]*)[】\]][（|\(]([^\(\)（）]*)[）|\)]/g, "\[$1\]\($2\)");
+    text = text.replace(/\[+([^\[\]]*)\]+\(/g, "\[$1\](");
+    text = text.replace(/(?<=^|\s)    /mg, "\t");
+    text = text.replace(/(?<=\]\([^\(\)]+\))$/g, "  ");
+    text = text.replace(/\*\s+\>\s+/g, "- ");
+    text = text.replace(/(?<=\s)[0-9]+。 /g, "1. ");
+    替换笔记正文(text);
+}
+
+export function 搜索当前文本() {
+    // @ts-ignore
+    var 当前文件 = app.workspace.getActiveFile();
+    // @ts-ignore
+    var 当前文件路径 = 当前文件.name;
+    当前文件路径 = 当前文件路径.replace(/\.md$/, "");
+    // @ts-ignore
+    var view = app.workspace.getActiveViewOfType(MarkdownView);
+    // @ts-ignore
+    var _txt = view.getSelection();
+    _txt = _txt.replace(/^/, "path:" + 当前文件路径 + " /");
+    // @ts-ignore
+    app.internalPlugins.getPluginById('global-search').instance.openGlobalSearch(_txt);
+}
+
+export function 转换路径() {
+    获取编辑器信息();
+    if (所选文本 == null) { return };
+    var link1 = /^[a-zA-Z]:\\/;
+    var link2 = /^(\[[^\[\]]*\]\()*file:\/\/\/[^\(\)]*\)*/;
+    var link3 = /^\[[^\[\]]*\]\(([a-zA-Z]:\\[^\(\)]*)\)*/;
+    if (link1.test(所选文本)) {
+        所选文本 = 所选文本.replace(/\s/mg, "%20");
+        所选文本 = 所选文本.replace(/^(.*)$/m, "\[file\]\(file:///$1\)");
+        所选文本 = 所选文本.replace(/\\/img, "\/");
+        替换所选文本(所选文本);
+    } else if (link2.test(所选文本)) {
+        所选文本 = 所选文本.replace(/%20/mg, " ");
+        所选文本 = 所选文本.replace(/^(\[[^\[\]]*\]\()*file:\/\/\/([^\(\)]*)\)*/m, "$2");
+        所选文本 = 所选文本.replace(/\//mg, "\\");
+        替换所选文本(所选文本);
+    } else if (link3.test(所选文本)) {
+        所选文本 = 所选文本.replace(/^\[[^\[\]]*\]\(([a-zA-Z]:\\[^\(\)]*)\)*/m, "$1");
+        替换所选文本(所选文本);
+    } else {
+        new Notice("您划选的路径格式不正确！");
+        return;
+    }
+}
+
+export function 续选当前文本() {
+    获取编辑器信息();
+    // @ts-ignore
+    var lang = 选至行尾.indexOf(所选文本);
+    var 起始 = 选至行首.length + lang;
+    var 结束 = 起始 + 所选文本.length;
+    if (lang < 0) { return };
+    // @ts-ignore
+    编辑模式.setSelection({ line: 当前行号, ch: 起始 }, { line: 当前行号, ch: 结束 });
+}
+
+export function 智能粘贴() {
+    获取编辑器信息();
+    navigator.clipboard.readText().then(clipText => {
+        if (clipText == "" || clipText == null) { return };
+        var tmpText = clipText.replace(/[\r\n|\n]+/g, "");
+        var tableReg = /\|.*?\|.*/;
+        // @ts-ignore
+        var htmlReg = /<[^>]+>/g;
+        // @ts-ignore
+        var codeReg = /`[^`]+`/;
+        if (tableReg.test(tmpText)) {
+            clipText = clipText.replace(/\t/g, "\|");
+            clipText = clipText.replace(/^(?=[^\r\n])|(?<=[^\r\n])$/mg, "\|");
+            clipText = clipText.replace(/(?<=\|)(?=\|)/g, "　");
+            new Notice("剪贴板数据已转为MD语法表格！");
+        } else if (htmlReg.test(tmpText)) {
+            console.log('获取到富文本');
+        } else {
+            clipText = "```\n" + clipText + "\n```\n";
+            new Notice("剪贴板数据已转为代码块格式！");
+        }
+        编辑模式.replaceSelection(clipText);
+    }).catch(err => {
+        console.error('未能读取到剪贴板上的内容: ', err);
+    });
+}
+
+export function 获取标注文本() {
+    获取编辑器信息();
+    if (!笔记正文) return;
+    var tmp = 笔记正文.replace(/^(?!#+ |#注释|#标注|#批注|#反思|#备注|.*==|.*%%).*$|^[^#\n%=]*(==|%%)|(==|%%)[^\n%=]*$|(==|%%)[^\n%=]*(==|%%)/mg, "\n");
+    tmp = tmp.replace(/[\r\n|\n]+/g, "\n");
+    new Notice("已成功获取标注类文本，可以粘贴！");
+    navigator.clipboard.writeText(tmp);
+}
+
+export function 获取无语法文本() {
+    获取编辑器信息();
+    var mdText = /(^#+\s|(?<=^|\s*)#|^>|^\- \[( |x)\]|^\+ |<[^<>]+>|^1\. |^\-+$|^\*+$|==|\*+|~~|```|!*\[\[|\]\])/mg;
+    if (所选文本 == "") {
+        new Notice("请先划选部分文本，再执行命令！");
+    } else {
+        // @ts-ignore
+        所选文本 = 所选文本.replace(/\[([^\[\]]*)\]\([^\(\)]+\)/img, "$1");
+        所选文本 = 所选文本.replace(mdText, "");
+        所选文本 = 所选文本.replace(/^[ ]+|[ ]+$/mg, "");
+        所选文本 = 所选文本.replace(/(\r\n|\n)+/mg, "\n");
+        new Notice("已成功获取无语法文本，可以粘贴！");
+        navigator.clipboard.writeText(所选文本);
+    }
+}
+
+export function 嵌入当前网址页面() {
+    获取编辑器信息();
+    var vid, web;
+    var 基本格式 = '\n<iframe src="■" width=100% height="500px" frameborder="0" scrolling="auto"></iframe>';
+    // @ts-ignore
+    if (所选文本.match(/^https?:\/\/[^:]+/)) {
+        // @ts-ignore
+        if (所选文本.match(/^https?:\/\/v\.qq\.com/)) {
+            // @ts-ignore
+            vid = 所选文本.replace(/^http.*\/([^\/=\?\.]+)(\.html.*)?$/, "$1");
+            web = "https://v.qq.com/txp/iframe/player.html?vid=" + vid;
+            // @ts-ignore
+        } else if (所选文本.match(/^https?:\/\/www\.bilibili\.com/)) {
+            // @ts-ignore
+            vid = 所选文本.replace(/^http.*\/([^\/=\?\.]+)(\?spm.*)?$/, "$1");
+            web = "https://player.bilibili.com/player.html?bvid=" + vid;
+            // @ts-ignore
+        } else if (所选文本.match(/^https?:\/\/www\.youtube\.com/)) {
+            // @ts-ignore
+            vid = 所选文本.replace(/^http.*?v=([^\/=\?\.]+)(\/.*)?$/, "$1");
+            web = "https://www.youtube.com/embed/" + vid;
+        } else {
+            web = 所选文本;
+        }
+        基本格式 = 基本格式.replace(/■/, web);
+        笔记全文.replaceRange(基本格式, { line: 当前行号, ch: 当前行文本.length }, { line: 当前行号, ch: 当前行文本.length });
+        编辑模式.exec("goRight");
+    } else {
+        new Notice("所选文本不符合网址格式，无法嵌入！");
+    }
+}
+
+export function 列表转为图示() {
+    获取编辑器信息();
+    // @ts-ignore
+    var 大纲文本 = 所选文本.replace(/(    |\t)/mg, "■");
+    大纲文本 = 大纲文本.replace(/(\-\s|\d+\.\s)/mg, "");
+    大纲文本 = 大纲文本.replace(/\s+$/mg, "");
+    大纲文本 = 大纲文本.replace(/\n/g, "↵");
+    大纲文本 = 大纲文本.replace(/↵+$/, "");
+    var tagAry = 大纲文本.split("↵");
+
+    var fName = "";
+    var 主要语法 = "";
+    for (var i = 0; i < tagAry.length; i++) {
+        var thisLine = tagAry[i];
+        var n = thisLine.lastIndexOf("■");
+        if (i > 0) {
+            var upLine = tagAry[i - 1];
+            var m = upLine.lastIndexOf("■");
+        }
+
+        if (n < 0) {
+            fName = thisLine;
+        } else {
+            thisLine = thisLine.replace(/^■+/, "");
+            if (n > m) {
+                fName = fName + "-->" + thisLine;
+            } else if (n == m) {
+                fName = fName.replace(/(?<=(^|\-\-\>))[^\-\>]+$/, thisLine);
+            } else {
+                var cha = Number(m - n) + 1;
+                // @ts-ignore
+                fName = fName.replace(new RegExp("(-->[^->]+){" + cha + "}$"), "-->" + thisLine);
+            }
+            var 行语法 = fName.replace(/^.*\-\-\>(?=[^\-\>]+\-\-\>[^\-\>]+$)/mg, "");
+            主要语法 = 主要语法 + "↵" + 行语法;
+        }
+    }
+    var 输出语法 = "%%此图示由列表文本转换而成！%%↵" + 主要语法;
+    // @ts-ignore
+    编辑模式.setCursor({ line: 0, ch: 0 });
+    // @ts-ignore
+    笔记正文 = 获取笔记正文(); // Fix: manually call if internal helper doesn't update text object? 
+    // 其实 获取编辑器信息() 已经更新了 笔记正文, but original code calls 获取笔记正文 again?
+    // 获取编辑器信息() calls 获取笔记正文(). So it should be fine.
+    // But original code: 笔记正文 = this.获取笔记正文();
+    // Maybe it expects refresh?
+    // Let's call it just in case.
+    // Wait, 获取笔记正文() returns string but also updates global 笔记正文?
+    // In all-features.ts: function 获取笔记正文() { var text = ...; 笔记正文 = text; return text; }
+    // So calling it updates global.
+
+    var 新正文 = 笔记正文.replace(/\n/g, "↵");
+    if (新正文.includes("%%此图示由列表文本转换而成！%%")) {
+        新正文 = 新正文.replace(/%%此图示由列表文本转换而成！%%↵.+?(?=↵```)/g, 输出语法);
+        新正文 = 新正文.replace(/↵/g, "\n");
+        替换笔记正文(新正文);
+    } else {
+        new Notice("列表文本已转为MerMaid语法。\n可以粘贴！");
+        输出语法 = 输出语法.replace(/↵/g, "\n");
+        navigator.clipboard.writeText("```mermaid\ngraph TD\n" + 输出语法 + "\n```\n");
+    }
+}
+
+export function 折叠当前同级标题() {
+    获取编辑器信息();
+    if (!笔记全文) return;
+    if (/^#+\s/.test(当前行文本)) {
+        // @ts-ignore
+        app.commands.executeCommandById('editor:unfold-all');
+        var _str = 当前行文本.replace(/^(#+)\s.*$/, "$1");
+        // @ts-ignore
+        var 末行行号 = 编辑模式.lastLine();
+        for (var i = 末行行号; i >= 0; i--) {
+            // @ts-ignore
+            编辑模式.setCursor({ line: i, ch: 0 });
+            // @ts-ignore
+            var 本行文本 = 编辑模式.getLine(i);
+            if (new RegExp("^" + _str + "(?=[^#])").test(本行文本)) {
+                // @ts-ignore
+                app.commands.executeCommandById('editor:toggle-fold');
+            }
+        }
+    }
+}
+
+
+// ==================== 补全遗漏功能 ====================
+
+export function 游标上移() {
+    获取编辑器信息();
+    编辑模式.exec("goUp");
+}
+export function 游标下移() {
+    获取编辑器信息();
+    编辑模式.exec("goDown");
+}
+export function 游标左移() {
+    获取编辑器信息();
+    编辑模式.exec("goLeft");
+}
+export function 游标右移() {
+    获取编辑器信息();
+    编辑模式.exec("goRight");
+}
+export function 游标置首() {
+    获取编辑器信息();
+    编辑模式.exec("goStart");
+}
+export function 游标置尾() {
+    获取编辑器信息();
+    编辑模式.exec("goEnd");
+}
+
+export function 转为超链接语法() {
+    获取编辑器信息();
+    if (!笔记正文) return;
+    笔记正文 = 笔记正文.replace(/\[\[([^\[\]]+)\]\]/g, "[$1]($1)");
+    笔记正文 = 笔记正文.replace(/(?<=\]\([^\s]*)\s(?=[^\s]*\))/g, "%20");
+    替换笔记正文(笔记正文);
+}
+
+export function 括选文本1() {
+    var link = /.*【[^【】]+】.*/g;
+    var link1 = /【[^【】]*$|^[^【】]*】/g;
+    获取编辑器信息();
+    if (所选文本 == null) { return };
+    if (link1.test(所选文本)) {
+        return;
+    } else if (link.test(所选文本)) {
+        所选文本 = 所选文本.replace(/[【】]/g, "");
+    } else {
+        所选文本 = 所选文本.replace(/^(.+)$/mg, "【$1】");
+        所选文本 = 所选文本.replace(/^【\s*】$/mg, "");
+    }
+    替换所选文本(所选文本);
+}
+
+export function 括选文本2() {
+    var link = /.*（[^（）]*）.*/g;
+    var link1 = /（[^（）]*$|^[^（）]*）/g;
+    获取编辑器信息();
+    if (所选文本 == null) { return };
+    if (link1.test(所选文本)) {
+        return;
+    } else if (link.test(所选文本)) {
+        所选文本 = 所选文本.replace(/[（）]/g, "");
+    } else {
+        所选文本 = 所选文本.replace(/^(.+)$/mg, "($1)");
+        所选文本 = 所选文本.replace(/^(\s*)$/mg, "");
+    }
+    替换所选文本(所选文本);
+}
+
+export function 括选文本3() {
+    var link = /.*「[^「」]*」.*/g;
+    var link1 = /「[^「」]*$|^[^「」]*」/g;
+    获取编辑器信息();
+    if (所选文本 == null) { return };
+    if (link1.test(所选文本)) {
+        return;
+    } else if (link.test(所选文本)) {
+        所选文本 = 所选文本.replace(/[「」]/g, "");
+    } else {
+        所选文本 = 所选文本.replace(/^(.+)$/mg, "「$1」");
+        所选文本 = 所选文本.replace(/^「\s*」$/mg, "");
+    }
+    替换所选文本(所选文本);
+}
+
+export function 括选文本4() {
+    var link = /.*《[^《》]*》.*/;
+    var link1 = /《[^《》]*$|^[^《》]*》/;
+    获取编辑器信息();
+    if (所选文本 == null) { return };
+    if (link1.test(所选文本)) {
+        return;
+    } else if (link.test(所选文本)) {
+        所选文本 = 所选文本.replace(/[《》]/g, "");
+    } else {
+        所选文本 = 所选文本.replace(/^(.+)$/mg, "《$1》");
+        所选文本 = 所选文本.replace(/^《\s*》$/mg, "");
+    }
+    替换所选文本(所选文本);
+}
+
+export function 删除当前段落() {
+    获取编辑器信息();
+    var reg = /^[\t\s]*\d+(?=\.\s[^\s])/mg;
+    if (当前行文本.match(reg) == null) {
+        console.log("当前不是列表");
+        var reg1 = /^(.*\[\[)[^\[]+$/;
+        var reg2 = /^[^\]]+(\]\].*)$/;
+
+        if (reg1.test(选至行首) && reg2.test(选至行尾)) {
+            new Notice("优先删除内部链接，可以切换标题！");
+            选至行首 = 选至行首.replace(reg1, "$1");
+            选至行尾 = 选至行尾.replace(reg2, "$1");
+            笔记全文.replaceRange(选至行首 + 选至行尾, { line: 当前行号, ch: 0 }, { line: 当前行号, ch: 当前行文本.length });
+            编辑模式.setCursor({ line: 当前行号, ch: 选至行首.length });
+        } else {
+            笔记全文.replaceRange("", { line: 当前行号, ch: 0 }, { line: Number(当前行号 + 1), ch: 0 });
+        }
+    } else {
+        选至文末 = 选至文末.replace(/\n/g, "↫");
+        // @ts-ignore
+        var 后表部分 = 选至文末.match(/^([\t\s]*\d+\.\s[^↫]*↫)+/)[0].replace(/↫/g, "\n");
+        // @ts-ignore
+        var 后表行数 = 后表部分.match(/\n/g).length;
+        // @ts-ignore
+        var 缩进字符 = 当前行文本.match(/^[\t\s]*(?=\d)/)[0];
+        var reg3 = new RegExp("(?<=^" + 缩进字符 + ")\\d+(?=\\.*\\s)", "mg");
+        // @ts-ignore
+        后表部分 = 后表部分.replace(reg3, function (a) { return String(a * 1 - 1); });
+        后表部分 = 后表部分.replace(/^[^\n]*\n/, "");
+        // @ts-ignore
+        笔记全文.replaceRange(后表部分, { line: 当前行号, ch: 0 }, { line: 当前行号 + 后表行数, ch: 编辑模式.getLine(当前行号 + 后表行数).length });
+    };
+}
+
+export function 转换待办列表() {
+    获取编辑器信息();
+    var 当前新文本 = 当前行文本.replace(/(?<=^\s*([\-\+]|[0-9]+\.)\s\[) (?=\]\s[^\s])/mg, "x☀");
+    当前新文本 = 当前新文本.replace(/(?<=^\s*([\-\+]|[0-9]+\.)\s\[)x(?=\]\s[^\s])/mg, "-☀");
+    当前新文本 = 当前新文本.replace(/(?<=^\s*([\-\+]|[0-9]+\.)\s\[)\-(?=\]\s[^\s])/mg, "!☀");
+    当前新文本 = 当前新文本.replace(/(?<=^\s*([\-\+]|[0-9]+\.)\s\[)\!(?=\]\s[^\s])/mg, "?☀");
+    当前新文本 = 当前新文本.replace(/(?<=^\s*([\-\+]|[0-9]+\.)\s\[)\?(?=\]\s[^\s])/mg, ">☀");
+    当前新文本 = 当前新文本.replace(/(?<=^\s*([\-\+]|[0-9]+\.)\s\[)\>(?=\]\s[^\s])/mg, "<☀");
+    当前新文本 = 当前新文本.replace(/(?<=^\s*([\-\+]|[0-9]+\.)\s\[)\<(?=\]\s[^\s])/mg, "+☀");
+    当前新文本 = 当前新文本.replace(/(?<=^\s*([\-\+]|[0-9]+\.)\s\[)\+(?=\]\s[^\s])/mg, " ☀");
+    当前新文本 = 当前新文本.replace(/(?<=^\s*([\-\+]|[0-9]+\.)\s\[[\sx\-\+\?\!\<\>])☀(?=\]\s[^\s])/mg, "");
+    笔记全文.replaceRange(当前新文本, { line: 当前行号, ch: 0 }, { line: 当前行号, ch: 当前行文本.length });
+}
+
+export function 自动设置标题() {
+    获取编辑器信息();
+    if (!笔记正文) return;
+    笔记正文 = 笔记正文.replace(/\r?\n/g, "↫");
+    笔记正文 = 笔记正文.replace(/↫\s*↫/g, "↫↫");
+    笔记正文 = 笔记正文.replace(/\s*(?=↫)/g, "");
+    笔记正文 = 笔记正文.replace(/(?<=^|↫)([^#`\[\]\(\)↫]{3,}[^\.\?\!:,0-9，：。？！）↫])(?=↫|$)/g, "↫### $1↫");
+    笔记正文 = 笔记正文.replace(/#+([^#↫]+)↫*$/mg, "$1");
+    笔记正文 = 笔记正文.replace(/↫{3,}/g, "\r\n\r\n");
+    笔记正文 = 笔记正文.replace(/↫/g, "\r\n");
+    替换笔记正文(笔记正文);
+}
+
+export async function 获取富文本() {
+    获取编辑器信息();
+    try {
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+            if (item.types.includes("text/html")) {
+                const blob = await item.getType("text/html");
+                const text = await blob.text();
+                替换所选文本(text);
+                new Notice("已粘贴富文本HTML");
+                return;
+            }
+        }
+        new Notice("剪贴板中没有富文本数据");
+    } catch (e) {
+        new Notice("无法读取剪贴板");
+        console.error(e);
+    }
+}
